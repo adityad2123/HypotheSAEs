@@ -37,7 +37,7 @@ class SparseAutoencoder(nn.Module):
         multi_k: Optional[int] = None,
         dead_neuron_threshold_steps: int = 256,
         prefix_lengths: Optional[List[int]] = None,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        device: Optional[str] = None
     ) -> None:
         """Create a top-K sparse autoencoder.
 
@@ -71,6 +71,7 @@ class SparseAutoencoder(nn.Module):
         self.m_total_neurons = m_total_neurons
         self.k_active_neurons = k_active_neurons
 
+
         # Fallback defaults ---------------------------------------------------
         self.aux_k = (
             min(2 * k_active_neurons, m_total_neurons) if aux_k is None else aux_k
@@ -95,18 +96,31 @@ class SparseAutoencoder(nn.Module):
         self.input_bias = nn.Parameter(torch.zeros(input_dim))
         self.neuron_bias = nn.Parameter(torch.zeros(m_total_neurons))
 
-        # dead‑neuron bookkeeping --------------------------------------------
-        self.steps_since_activation = torch.zeros(
-            m_total_neurons, dtype=torch.long, device=device
-        )
+        # device determination -----------------------------------------------
+        if device is None:
+            if hasattr(torch, "cuda") and torch.cuda.is_available():
+                device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
 
-        self.device = device
+        self.device = torch.device(device)
+        
+        # dead‑neuron bookkeeping --------------------------------------------
+        self.register_buffer("steps_since_activation", torch.zeros(m_total_neurons, dtype=torch.long))
+        
         self.to(self.device)
 
     # ---------------------------------------------------------------------
     # Forward pass (agnostic to Matryoshka configuration)
     # ---------------------------------------------------------------------
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+
+        p = next(self.parameters())
+        if x.device != p.device: 
+            x = x.to(p.device)
+            
         # W_enc(x - b_pre) + b_enc
         x = x - self.input_bias
         pre_act = self.encoder(x) + self.neuron_bias
@@ -177,6 +191,10 @@ class SparseAutoencoder(nn.Module):
 
         multiK / auxK implemented as in O'Neill et al. (2024).
         """
+
+        p = next(self.parameters())
+        if x.device != p.device: 
+            x = x.to(p.device)
 
         activ = info["activations"]
         # main L2 -----------------------------------------------------------
@@ -385,6 +403,9 @@ class SparseAutoencoder(nn.Module):
                 all_activations.append(batch_activations.cpu())
         
         return torch.cat(all_activations, dim=0).numpy()
+    
+    def _dev(self, x=None):
+        return x.device if x is not None else next(self.parameters()).device
 
 # -----------------------------------------------------------------------------
 # Additional utils
