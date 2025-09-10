@@ -207,9 +207,21 @@ def get_local_embeddings(
     show_progress: bool = True,
     cache_name: Optional[str] = None,
     chunk_size: int = 50000,
-    device: Optional[torch.device] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device: Optional[str] = None
 ) -> Dict[str, np.ndarray]:
     """Get embeddings using local SentenceTransformer model with chunked caching."""
+
+    # Changed input of this function to take in the str device_code, and run on MPS if possible
+    if device is None:
+        if hasattr(torch, "cuda") and torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    device = torch.device(device)
+            
     # Filter out None values and empty strings
     texts = filter_invalid_texts(texts)
     
