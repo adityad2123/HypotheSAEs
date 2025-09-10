@@ -10,7 +10,7 @@ data/*
 *cache*
 notebooks/testing_notebook.ipynb
 local_llm_experiments/results/*
-
+hypothesaes/ollama_test.py
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

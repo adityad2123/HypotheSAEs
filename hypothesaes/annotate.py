@@ -11,6 +11,7 @@ import time
 
 from .llm_api import get_completion
 from .llm_local import is_local_model, get_local_completions
+from .llm_ollama import is_ollama_model, get_ollama_completions
 from .utils import load_prompt, truncate_text
 
 CACHE_DIR = os.path.join(Path(__file__).parent.parent, 'annotation_cache')
@@ -217,6 +218,69 @@ def _local_annotate(
         for text, concept in remaining_tasks:
             _store_annotation(results, concept, text, 0, cache=None) # Don't store failed annotations in cache
 
+def _ollama_annotate(
+    tasks: List[Tuple[str, str]],
+    results: Dict[str, Dict[str, int]],
+    cache: Optional[dict] = None,
+    model: Optional[str] = None,
+    show_progress: bool = True,
+    max_words_per_example: Optional[int] = None,
+    annotate_prompt_name: str = "annotate-simple",
+    max_tokens: int = 3,
+    temperature: Optional[float] = None,
+    max_retries: int = 3,
+    llm_sampling_kwargs: Optional[dict] = {},
+) -> None:
+    """Annotate (text, concept) tasks with a local Ollama model, using a single
+    call to `get_ollama_completions`.
+    """
+    annotate_prompt = load_prompt(annotate_prompt_name)
+    remaining_tasks = tasks.copy()
+    
+    for retry_count in range(max_retries + 1):
+        if not remaining_tasks:
+            break
+            
+        # Collect annotation prompts and truncate any texts if necessary
+        prompts, mapping = [], []
+        for text, concept in remaining_tasks:
+            truncated_text = truncate_text(text, max_words_per_example) # If None, no truncation
+            prompts.append(annotate_prompt.format(hypothesis=concept, text=truncated_text))
+            mapping.append((text, concept))
+
+        # Get annotation completions with local LLM
+        if temperature is not None:
+            llm_sampling_kwargs["temperature"] = temperature
+
+        completions = get_ollama_completions(
+            prompts,
+            model=model,
+            show_progress=show_progress and retry_count == 0,
+            max_tokens=max_tokens,
+            llm_sampling_kwargs=llm_sampling_kwargs,
+        )
+
+        # Parse completions, update results & cache, track failed tasks
+        failed_tasks = []
+        for (text, concept), completion in zip(mapping, completions):
+            annotation = parse_completion(completion.strip().lower())
+            if annotation is not None:
+                _store_annotation(results, concept, text, annotation, cache)
+            else:
+                failed_tasks.append((text, concept))
+        
+        # Update remaining tasks for next retry
+        remaining_tasks = failed_tasks
+        
+        if failed_tasks and retry_count < max_retries:
+            print(f"Retry {retry_count + 1}/{max_retries}: {len(failed_tasks)}/{len(tasks)} tasks failed annotation")
+    
+    # Assign 0 to any tasks that still failed after all retries
+    if remaining_tasks:
+        print(f"Assigning 0 to {len(remaining_tasks)} tasks that failed after {max_retries} retries")
+        for text, concept in remaining_tasks:
+            _store_annotation(results, concept, text, 0, cache=None) # Don't store failed annotations in cache
+
 def annotate(
     tasks: List[Tuple[str, str]],
     model: str = "gpt-4.1-mini",
@@ -273,6 +337,15 @@ def annotate(
     if uncached_tasks:
         if is_local_model(model):
             _local_annotate(
+                tasks=uncached_tasks,
+                model=model,
+                cache=cache,
+                results=results,
+                show_progress=show_progress,
+                **annotation_kwargs,
+            )
+        if is_ollama_model(model):
+            _ollama_annotate(
                 tasks=uncached_tasks,
                 model=model,
                 cache=cache,

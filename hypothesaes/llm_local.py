@@ -30,6 +30,8 @@ def hf_model_exists(repo_id: str) -> bool:
         return e.response is not None and e.response.status_code in {401, 403}
 
 def is_local_model(model: str) -> bool:
+    if isinstance(model, str) and ":" in model:
+        return False
     return model in _LOCAL_ENGINES or hf_model_exists(model)
 
 def _sleep_all_except(active_model: Optional[str] = None) -> None:

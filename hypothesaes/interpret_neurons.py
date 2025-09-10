@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from .llm_api import get_completion
 from .llm_local import is_local_model, get_local_completions
+from .llm_ollama import is_ollama_model, get_ollama_completions
 from .utils import load_prompt, truncate_text
 from .annotate import annotate, CACHE_DIR
 
@@ -306,6 +307,15 @@ class NeuronInterpreter:
                 valid_prompts,
                 model=self.interpreter_model,
                 tokenizer_kwargs=config.llm.tokenizer_kwargs,
+                max_tokens=config.llm.max_interpretation_tokens,
+                llm_sampling_kwargs=llm_sampling_kwargs,
+            )
+            return [self._parse_interpretation(r) for r in raw_responses]
+        
+        if is_ollama_model(self.interpreter_model):
+            raw_responses = get_ollama_completions(
+                valid_prompts,
+                model=self.interpreter_model,
                 max_tokens=config.llm.max_interpretation_tokens,
                 llm_sampling_kwargs=llm_sampling_kwargs,
             )

@@ -6,16 +6,16 @@ from hypothesaes.annotate import annotate
 from .sentences import BLUE_SENTENCES, RED_SENTENCES, ALL_TEST_SENTENCES
 
 LOCAL_EMBEDDER = "sentence-transformers/all-MiniLM-L6-v2"
-LOCAL_LLM = "Qwen/Qwen3-8B"
+OLLAMA_LLM = "mistral:7b"
 
-def test_local_interpretation():
+def test_ollama_interpretation():
     texts = BLUE_SENTENCES + RED_SENTENCES
     activations = np.stack([
         np.concatenate([np.ones(len(BLUE_SENTENCES)), np.zeros(len(RED_SENTENCES))]),
         np.concatenate([np.zeros(len(BLUE_SENTENCES)), np.ones(len(RED_SENTENCES))])
     ], axis=1)
 
-    interpreter = NeuronInterpreter(interpreter_model=LOCAL_LLM)
+    interpreter = NeuronInterpreter(interpreter_model=OLLAMA_LLM)
     config = InterpretConfig(
         sampling=SamplingConfig(n_examples=20),
         llm=LLMConfig(max_interpretation_tokens=50, temperature=0.7, tokenizer_kwargs={"enable_thinking": False}),
@@ -27,12 +27,14 @@ def test_local_interpretation():
         assert isinstance(results[idx][0], str)
         assert len(results[idx][0]) > 0
 
-def test_local_annotation():
+def test_ollama_annotation():
     blue_concept = "contains words associated with the color blue"
     red_concept = "contains words associated with the color red"
     positive_tasks = [(text, blue_concept) for text in BLUE_SENTENCES] + [(text, red_concept) for text in RED_SENTENCES]
     negative_tasks = [(text, blue_concept) for text in RED_SENTENCES] + [(text, red_concept) for text in BLUE_SENTENCES]
-    results = annotate(positive_tasks + negative_tasks, model=LOCAL_LLM, show_progress=True, tokenizer_kwargs={"enable_thinking": False})
+    results = annotate(positive_tasks + negative_tasks, model=OLLAMA_LLM, show_progress=True)
+    
+    print(results) # I added this print statement so I could just see what's going on under the hood.
     
     # Calculate precision and recall for each concept
     for concept, concept_dict in results.items():

@@ -63,10 +63,7 @@ def train_sae(
     """
     embeddings = np.array(embeddings)
     input_dim = embeddings.shape[1]
-    
-    X = torch.tensor(embeddings, dtype=torch.float)
-    X_val = torch.tensor(val_embeddings, dtype=torch.float) if val_embeddings is not None else None
-    
+        
     if checkpoint_dir is not None:
         os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_name = get_sae_checkpoint_name(M, K, matryoshka_prefix_lengths)
@@ -83,6 +80,12 @@ def train_sae(
         dead_neuron_threshold_steps=dead_neuron_threshold_steps,
         prefix_lengths=matryoshka_prefix_lengths,
     )
+
+    dev = next(sae.parameters()).device
+
+    X = torch.tensor(embeddings, dtype=torch.float, device=dev)
+    X_val = torch.tensor(val_embeddings, dtype=torch.float, device=dev) if val_embeddings is not None else None
+
     
     sae.fit(
         X_train=X,
@@ -278,7 +281,7 @@ def generate_hypotheses(
 
     print(f"\nStep 1: Selecting top {n_selected_neurons} predictive neurons")
     if n_selected_neurons > activations.shape[1]:
-        raise ValueError(f"n_selected_neurons ({n_selected_neurons}) can be at most the total number of neurons ({activations.shape[1]})")
+        raise ValueError(f"n_selected_neurons ({n_selected_neurons}) can be at most the total number of neurons ({activations.shape[1]})") # !!!
     
     selected_neurons, scores = select_neurons(
         activations=activations,
