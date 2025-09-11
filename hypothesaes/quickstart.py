@@ -7,7 +7,7 @@ import torch
 import os
 from pathlib import Path
 
-from .sae import SparseAutoencoder, load_model, get_multiple_sae_activations, get_sae_checkpoint_name
+from .sae import SparseAutoencoder, SupervisedSparseAutoencoder, load_model, get_multiple_sae_activations, get_sae_checkpoint_name
 from .select_neurons import select_neurons
 from .interpret_neurons import NeuronInterpreter, InterpretConfig, ScoringConfig, LLMConfig, SamplingConfig
 from .utils import get_text_for_printing
@@ -90,6 +90,114 @@ def train_sae(
     sae.fit(
         X_train=X,
         X_val=X_val,
+        save_dir=checkpoint_dir,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        n_epochs=n_epochs,
+        aux_coef=aux_coef,
+        multi_coef=multi_coef,
+        patience=patience,
+        clip_grad=clip_grad,
+        show_progress=show_progress,
+    )
+
+    return sae
+
+def train_supervised_sae(
+    embeddings: Union[List, np.ndarray],
+    labels: Union[List, np.ndarray],
+    M: int,
+    K: int,
+    alpha: int,
+    task: str,
+    n_classes: int,
+    *,
+    matryoshka_prefix_lengths: Optional[List[int]] = None,
+    checkpoint_dir: Optional[str] = None,
+    overwrite_checkpoint: bool = False,
+    val_embeddings: Optional[Union[List, np.ndarray]] = None,
+    val_labels: Optional[Union[List, np.array]] = None,
+    aux_k: Optional[int] = None,
+    multi_k: Optional[int] = None,
+    dead_neuron_threshold_steps: int = 256,
+    batch_size: int = 512,
+    learning_rate: float = 5e-4,
+    n_epochs: int = 100,
+    aux_coef: float = 1/32,
+    multi_coef: float = 0.0,
+    patience: int = 3,
+    clip_grad: float = 1.0,
+    show_progress: bool = True,
+) -> SparseAutoencoder:
+    """Train a Sparse Autoencoder or load an existing one.
+    
+    Args:
+        embeddings: Pre-computed embeddings for training (list or numpy array)
+        M: Number of neurons in SAE
+        K: Number of top-activating neurons to keep per forward pass
+        matryoshka_prefix_lengths: List of prefix lengths for Matryoshka loss (None for vanilla SAE)
+        checkpoint_dir: Optional directory for storing/loading SAE checkpoints
+        overwrite_checkpoint: Whether to overwrite existing checkpoints
+        val_embeddings: Optional validation embeddings for early stopping during SAE training
+        aux_k: Number of neurons to consider for dead neuron revival
+        multi_k: Number of neurons for secondary reconstruction
+        dead_neuron_threshold_steps: Number of non-firing steps after which a neuron is considered dead
+        batch_size: Batch size for training
+        learning_rate: Learning rate for training
+        n_epochs: Maximum number of training epochs
+        aux_coef: Coefficient for auxiliary loss
+        multi_coef: Coefficient for multi-k loss
+        patience: Early stopping patience
+        clip_grad: Gradient clipping value
+        show_progress: Whether to show training progress bar
+        
+    Returns:
+        Trained SupervisedSparseAutoencoder model
+    """
+    embeddings = np.array(embeddings)
+    val_embeddings = np.array(val_embeddings)
+    labels = np.array(labels)
+    val_labels = np.array(val_labels)
+
+    input_dim = embeddings.shape[1]
+        
+    if checkpoint_dir is not None:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_name = get_sae_checkpoint_name(M, K, matryoshka_prefix_lengths)
+        checkpoint_path = os.path.join(checkpoint_dir, checkpoint_name)
+        if os.path.exists(checkpoint_path) and not overwrite_checkpoint:
+            return load_model(checkpoint_path)
+    
+    sae = SupervisedSparseAutoencoder(
+        input_dim=input_dim,
+        m_total_neurons=M,
+        k_active_neurons=K,
+        alpha=alpha,
+        task=task,
+        n_classes=n_classes,
+        aux_k=aux_k,
+        multi_k=multi_k,
+        dead_neuron_threshold_steps=dead_neuron_threshold_steps,
+        prefix_lengths=matryoshka_prefix_lengths,
+    )
+
+    dev = next(sae.parameters()).device
+
+    X = torch.tensor(embeddings, dtype=torch.float, device=dev)
+    X_val = torch.tensor(val_embeddings, dtype=torch.float, device=dev) if val_embeddings is not None else None
+
+    if task == 'multiclass':
+        y = torch.tensor(labels, dtype=torch.long, device=dev)
+        y_val = torch.tensor(val_labels, dtype=torch.long, device=dev) if val_labels is not None else None
+    else:
+        y = torch.tensor(labels, dtype=torch.float, device=dev).view(-1, 1)
+        y_val = torch.tensor(val_labels, dtype=torch.float, device=dev).view(-1, 1) if val_labels is not None else None
+    
+    sae.fit(
+        X_train=X,
+        y_train=y,
+        X_val=X_val,
+        y_val=y_val,
         save_dir=checkpoint_dir,
         batch_size=batch_size,
         learning_rate=learning_rate,
