@@ -75,6 +75,17 @@ def test_train_sae(test_data):
     _ = load_model(checkpoint_path)
     os.remove(checkpoint_path)
 
+def test_train_supervised_sae(test_data):
+    """Test training, saving, and loading SAEs with different configurations."""
+    M, K = 2, 1
+    checkpoint_dir = "./"
+    _ = train_sae(test_data["local_embeddings"], M, K, n_epochs=3, checkpoint_dir=checkpoint_dir)
+    
+    checkpoint_path = os.path.join(checkpoint_dir, get_sae_checkpoint_name(M, K))
+    assert os.path.exists(checkpoint_path)
+    _ = load_model(checkpoint_path)
+    os.remove(checkpoint_path)
+
 def test_train_matryoshka_sae(test_data):
     """Test training a Matryoshka SAE (with multiple prefix lengths)."""
     matryoshka_prefix_lengths = [2, 4]
