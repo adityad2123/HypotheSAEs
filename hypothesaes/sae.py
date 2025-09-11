@@ -21,7 +21,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
-
 # ----------------------------------------------------------------------------
 # Sparse Autoencoder with optional Matryoshka loss
 # ----------------------------------------------------------------------------
@@ -192,9 +191,8 @@ class SparseAutoencoder(nn.Module):
         multiK / auxK implemented as in O'Neill et al. (2024).
         """
 
-        p = next(self.parameters())
-        if x.device != p.device: 
-            x = x.to(p.device)
+        if x.device != self.device: 
+            x = x.to(self.device)
 
         activ = info["activations"]
         # main L2 -----------------------------------------------------------
@@ -404,8 +402,275 @@ class SparseAutoencoder(nn.Module):
         
         return torch.cat(all_activations, dim=0).numpy()
     
-    def _dev(self, x=None):
-        return x.device if x is not None else next(self.parameters()).device
+class SupervisedSparseAutoencoder(SparseAutoencoder):
+    def __init__(
+        self,
+        input_dim: int,
+        m_total_neurons: int,
+        k_active_neurons: int,
+        alpha: float,
+        task: str,
+        n_classes: int,
+        *,
+        aux_k: Optional[int] = None,
+        multi_k: Optional[int] = None,
+        dead_neuron_threshold_steps: int = 256,
+        prefix_lengths: Optional[List[int]] = None,
+        device: Optional[str] = None
+    ) -> None:
+        super().__init__(
+            input_dim=input_dim,
+            m_total_neurons=m_total_neurons,
+            k_active_neurons=k_active_neurons,
+            aux_k=aux_k,
+            multi_k=multi_k,
+            dead_neuron_threshold_steps=dead_neuron_threshold_steps,
+            prefix_lengths=prefix_lengths,
+            device=device,
+        )
+        if task not in ("binary", "multiclass", "regression"):
+            raise ValueError(f"task must be one of 'binary','multiclass','regression'; got {task}")
+        if task == "multiclass" and n_classes < 2:
+            raise ValueError("multiclass requires n_classes >= 2")
+        if task in ("binary", "regression") and n_classes != 1:
+            raise ValueError(f"{task} requires n_classes == 1")
+
+        self.alpha = alpha
+        self.task = task
+        self.n_classes = n_classes
+
+        out_dim = n_classes if task == 'multiclass' else 1
+        self.pred_head = nn.Linear(self.m_total_neurons, out_dim, bias=True)
+
+        self.pred_head.to(self.device)
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Dict]:
+
+        p = next(self.parameters())
+        if x.device != p.device: 
+            x = x.to(p.device)
+            
+        # W_enc(x - b_pre) + b_enc
+        x = x - self.input_bias
+        pre_act = self.encoder(x) + self.neuron_bias
+
+        # main Top‑K ---------------------------------------------------------
+        topk_vals, topk_idx = torch.topk(pre_act, self.k_active_neurons, dim=-1)
+        topk_vals = F.relu(topk_vals)
+        activ = torch.zeros_like(pre_act)
+        activ.scatter_(-1, topk_idx, topk_vals)
+
+        # multi‑K --------------------------------------------------
+        if self.multi_k is not None:
+            multik_vals, multik_idx = torch.topk(pre_act, self.multi_k, dim=-1)
+            multik_vals = F.relu(multik_vals)
+            multik_activ = torch.zeros_like(pre_act)
+            multik_activ.scatter_(-1, multik_idx, multik_vals)
+            multik_recon = self.decoder(multik_activ) + self.input_bias
+        else:
+            multik_recon = None
+
+        # dead‑neuron tracking
+        self.steps_since_activation += 1
+        self.steps_since_activation.scatter_(0, topk_idx.unique(), 0)
+
+        # reconstructions ----------------------------------------------------
+        recon = self.decoder(activ) + self.input_bias
+
+        # aux‑K --------------------------------------------------------------
+        aux_idx = aux_vals = None
+        if self.aux_k is not None:
+            dead_mask = (self.steps_since_activation > self.dead_neuron_threshold_steps).float()
+            dead_pre_act = pre_act * dead_mask
+            aux_vals, aux_idx = torch.topk(dead_pre_act, self.aux_k, dim=-1)
+            aux_vals = F.relu(aux_vals)
+        
+        # predicting from the activation --------------------------------------
+        # This is the only new part of the function, essentially.
+        logits = self.pred_head(activ)
+
+        info = {
+            "activations": activ,  # needed for Matryoshka slices
+            "topk_indices": topk_idx,
+            "topk_values": topk_vals,
+            "multik_reconstruction": multik_recon,
+            "aux_indices": aux_idx,
+            "aux_values": aux_vals,
+            "logits": logits
+        }
+        return recon, info
+    
+    def compute_loss(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        recon: torch.Tensor,
+        info: Dict[str, torch.Tensor],
+        aux_coef: float,
+        multi_coef: float,
+    ) -> torch.Tensor:
+        """Return total loss (Matryoshka L2 + optional multi‑K + aux).
+
+        If `len(prefix_lengths)==1` there is no Matryoshka nesting.
+        Otherwise we average the L2 of every prefix reconstruction as in
+        Bussmann et al. (2025).
+
+        multiK / auxK implemented as in O'Neill et al. (2024).
+
+        Ideally, we could also pass in some sort of weights for the binary / multiclass classification
+        to prevent class imbalance errors. I have not implemented that change right now.
+        """
+
+        if x.device != self.device: 
+            x = x.to(self.device)
+
+        activ = info["activations"]
+        # main L2 -----------------------------------------------------------
+        if self.prefix_lengths is None or len(self.prefix_lengths) == 1:
+            main_l2 = self._normalized_mse(recon, x)
+        else:
+            l2_terms = []
+            dec_weight = self.decoder.weight  # (input_dim, m_total_neurons)
+            for end in self.prefix_lengths:
+                # activ[:, :end] is (batchsize, end);  dec_weight[:, :end] is (input_dim, end)
+                prefix_recon = activ[:, :end] @ dec_weight[:, :end].t() + self.input_bias
+                l2_terms.append(self._normalized_mse(prefix_recon, x))
+            main_l2 = torch.stack(l2_terms).mean()
+
+        # multi‑K term ------------------------------------------------------
+        if multi_coef != 0 and info["multik_reconstruction"] is not None:
+            main_l2 = main_l2 + multi_coef * self._normalized_mse(
+                info["multik_reconstruction"], x
+            )
+
+        # aux‑K term --------------------------------------------------------
+        if self.aux_k is not None and info["aux_indices"] is not None:
+            err = x - recon.detach()
+            aux_act = torch.zeros_like(activ)
+            aux_act.scatter_(-1, info["aux_indices"], info["aux_values"])
+            err_recon = self.decoder(aux_act)
+            aux_loss = self._normalized_mse(err_recon, err)
+            main_l2 += aux_coef * aux_loss
+        
+        # supervised loss ---------------------------------------------------
+        if y is None or "logits" not in info: raise ValueError("Parameters for a supervised SAE not properly provided")
+        logits = info["logits"]
+        if self.task == 'multiclass':
+            crit = torch.nn.CrossEntropyLoss()
+            sup_loss = crit(logits, y.long())
+        elif self.task == 'binary':
+            yb = y.float().view(-1, 1)
+            crit = torch.nn.BCEWithLogitsLoss()
+            sup_loss = crit(logits, yb)
+        else:
+            yr = y.float().view(-1, 1)
+            crit = torch.nn.MSELoss()
+            sup_loss = crit(logits, yr)
+        
+        return (1 - self.alpha) * main_l2 + self.alpha * sup_loss
+    
+    def fit(
+        self,
+        X_train: torch.Tensor,
+        y_train: torch.Tensor,
+        X_val: Optional[torch.Tensor] = None,
+        y_val: Optional[torch.Tensor] = None,
+        save_dir: Optional[str] = None,
+        batch_size: int = 512,
+        learning_rate: float = 5e-4,
+        n_epochs: int = 200,
+        aux_coef: float = 1 / 32,
+        multi_coef: float = 0.0,
+        patience: int = 5,
+        show_progress: bool = True,
+        clip_grad: float = 1.0
+    ) -> Dict:
+        """Train the sparse autoencoder on input data."""
+        train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=batch_size) if X_val is not None else None
+        
+        # Initialize from batch of data
+        self.initialize_weights_(X_train.to(self.device))
+        
+        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
+        
+        # Training loop setup
+        best_val_loss = float('inf')
+        patience_counter = 0
+        history = {'train_loss': [], 'val_loss': [], 'dead_neuron_ratio': []}
+        
+        # Training loop
+        iterator = tqdm(range(n_epochs)) if show_progress else range(n_epochs)
+        for epoch in iterator:
+            self.train()
+            train_losses = []
+            
+            for batch_x, batch_y in train_loader:
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
+                recon, info = self(batch_x)
+                loss = self.compute_loss(batch_x, batch_y, recon, info, aux_coef, multi_coef)
+                
+                optimizer.zero_grad()
+                loss.backward()
+                self.adjust_decoder_gradient_()
+                
+                # Apply gradient clipping
+                if clip_grad is not None:
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), clip_grad)
+                
+                optimizer.step()
+                self.normalize_decoder_()
+                
+                train_losses.append(loss.item())
+            
+            avg_train_loss = np.mean(train_losses)
+            history['train_loss'].append(avg_train_loss)
+            
+            # Track dead neurons
+            dead_ratio = (self.steps_since_activation > self.dead_neuron_threshold_steps).float().mean().item()
+            history['dead_neuron_ratio'].append(dead_ratio)
+            
+            # Validation
+            if val_loader is not None:
+                self.eval()
+                val_losses = []
+                with torch.no_grad():
+                    for batch_x, batch_y in val_loader:
+                        batch_x = batch_x.to(self.device)
+                        batch_y = batch_y.to(self.device)
+                        recon, info = self(batch_x)
+                        val_loss = self.compute_loss(batch_x, batch_y, recon, info, aux_coef, multi_coef)
+                        val_losses.append(val_loss.item())
+                
+                avg_val_loss = np.mean(val_losses)
+                history['val_loss'].append(avg_val_loss)
+                
+                # Early stopping check
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= patience:
+                        print(f"Early stopping triggered after {epoch+1} epochs")
+                        break
+            
+            # Update progress bar
+            if show_progress:
+                iterator.set_postfix({
+                    'train_loss': f'{avg_train_loss:.4f}',
+                    'val_loss': f'{avg_val_loss:.4f}' if val_loader else 'N/A',
+                    'dead_ratio': f'{dead_ratio:.3f}'
+                })
+        
+        # Save final model
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            filename = get_sae_checkpoint_name(self.m_total_neurons, self.k_active_neurons, self.prefix_lengths)
+            self.save(os.path.join(save_dir, filename))
+            
+        return history
 
 # -----------------------------------------------------------------------------
 # Additional utils
