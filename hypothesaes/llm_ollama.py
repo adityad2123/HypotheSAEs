@@ -15,7 +15,7 @@ def is_ollama_model(model: str):
         return False
     return found_model == model
 
-def find_model(model_name: Optional[str]):
+def find_model(model_name: Optional[str]) -> str:
 
     models = ollama.list()
     if len(list(models)) == 0:
@@ -26,8 +26,8 @@ def find_model(model_name: Optional[str]):
     if model_name in model_details:
         print(f"Found {model_name}, with {model_details[model_name]['param_size']} parameters")
         return model_name
-    print(f"There is no {model_name}. Defaulting to {smallest_model} with {model_details[model_name]['param_size']} parameters.")
-    return smallest_model
+    else:
+        raise ValueError(f"You do not have {model_name} model installed on Ollama.")
 
 _SUPPORTED_OLLAMA_KEYS = {
     "temperature", "seed", "stop", "stream"
