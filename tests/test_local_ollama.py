@@ -1,3 +1,9 @@
+"""
+This file is essentially a copy of test_local_llm,
+but the tests have been modified to test local ollama models 
+instead of the vLLM local models
+"""
+
 import numpy as np
 from hypothesaes import get_local_embeddings, train_sae
 from hypothesaes import NeuronInterpreter, InterpretConfig, LLMConfig, SamplingConfig

@@ -76,7 +76,7 @@ def test_train_sae(test_data):
     os.remove(checkpoint_path)
 
 def test_train_supervised_sae(test_data):
-    """Test training, saving, and loading SAEs with different configurations."""
+    """Test training, saving, and loading the supervised SAEs with different configurations."""
     M, K = 2, 1
     checkpoint_dir = "./"
     _ = train_sae(test_data["local_embeddings"], M, K, n_epochs=3, checkpoint_dir=checkpoint_dir)

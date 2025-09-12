@@ -129,28 +129,15 @@ def train_supervised_sae(
     clip_grad: float = 1.0,
     show_progress: bool = True,
 ) -> SparseAutoencoder:
-    """Train a Sparse Autoencoder or load an existing one.
+    """Train a Supervised Sparse Autoencoder or load an existing one.
+    Same args as `train_sae`.
     
-    Args:
-        embeddings: Pre-computed embeddings for training (list or numpy array)
-        M: Number of neurons in SAE
-        K: Number of top-activating neurons to keep per forward pass
-        matryoshka_prefix_lengths: List of prefix lengths for Matryoshka loss (None for vanilla SAE)
-        checkpoint_dir: Optional directory for storing/loading SAE checkpoints
-        overwrite_checkpoint: Whether to overwrite existing checkpoints
-        val_embeddings: Optional validation embeddings for early stopping during SAE training
-        aux_k: Number of neurons to consider for dead neuron revival
-        multi_k: Number of neurons for secondary reconstruction
-        dead_neuron_threshold_steps: Number of non-firing steps after which a neuron is considered dead
-        batch_size: Batch size for training
-        learning_rate: Learning rate for training
-        n_epochs: Maximum number of training epochs
-        aux_coef: Coefficient for auxiliary loss
-        multi_coef: Coefficient for multi-k loss
-        patience: Early stopping patience
-        clip_grad: Gradient clipping value
-        show_progress: Whether to show training progress bar
-        
+    Additional args:
+        labels: True labels for the training data
+        alpha: Weight of the supervised loss
+        task: Can be "binary," "multiclass," or "regression" depending on the type of dataset
+        n_classes: Number of output dimensions for the supervised prediction head
+        val_labels: True labels for the validation data
     Returns:
         Trained SupervisedSparseAutoencoder model
     """

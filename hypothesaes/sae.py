@@ -418,6 +418,19 @@ class SupervisedSparseAutoencoder(SparseAutoencoder):
         prefix_lengths: Optional[List[int]] = None,
         device: Optional[str] = None
     ) -> None:
+        """Create a top-K supervised sparse autoencoder.
+
+        We inherit all parameters from SparseAutoencoder.
+        Additional Parameters
+        ----------
+        alpha : float
+            Weight of the supervised loss. Overall loss calculated as (1-alpha) * reconstruction loss + alpha * supervised loss.
+        task : str
+            Can be "binary," "multiclass," or "regression" depending on the type of dataset.
+            Influences the supervised loss function in compute_loss.
+        n_classes : int
+            Number of output dimensions for the supervised prediction head.
+        """
         super().__init__(
             input_dim=input_dim,
             m_total_neurons=m_total_neurons,
@@ -496,7 +509,7 @@ class SupervisedSparseAutoencoder(SparseAutoencoder):
             "multik_reconstruction": multik_recon,
             "aux_indices": aux_idx,
             "aux_values": aux_vals,
-            "logits": logits
+            "logits": logits # added logits to info
         }
         return recon, info
     
@@ -509,16 +522,8 @@ class SupervisedSparseAutoencoder(SparseAutoencoder):
         aux_coef: float,
         multi_coef: float,
     ) -> torch.Tensor:
-        """Return total loss (Matryoshka L2 + optional multi‑K + aux).
-
-        If `len(prefix_lengths)==1` there is no Matryoshka nesting.
-        Otherwise we average the L2 of every prefix reconstruction as in
-        Bussmann et al. (2025).
-
-        multiK / auxK implemented as in O'Neill et al. (2024).
-
-        Ideally, we could also pass in some sort of weights for the binary / multiclass classification
-        to prevent class imbalance errors. I have not implemented that change right now.
+        """Same as compute_loss for the SparseAutoencoder, with a supervised loss term.
+        Loss function depends on the `type` of problem presented.
         """
 
         if x.device != self.device: 
@@ -585,7 +590,8 @@ class SupervisedSparseAutoencoder(SparseAutoencoder):
         show_progress: bool = True,
         clip_grad: float = 1.0
     ) -> Dict:
-        """Train the sparse autoencoder on input data."""
+        """Train the sparse autoencoder on input data.
+        We've added y_train and y_val to help us fit the data using a supervised algorithm."""
         train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(TensorDataset(X_val, y_val), batch_size=batch_size) if X_val is not None else None
         

@@ -1,5 +1,7 @@
 # HypotheSAEs: Sparse Autoencoders for Hypothesis Generation
 
+PLEASE NOTE THIS README IS UNCHANGED FROM THE ORIGINAL REPO: see [here](https://docs.google.com/document/d/1FQnRUKG4CuYi8up4eHEKPeB8Q-dQP1EuVMGieXgS5-E/edit?tab=t.0) for a write-up of the changes made.
+
 [![pypi](https://img.shields.io/pypi/v/hypothesaes?color=blue)](https://pypi.org/project/hypothesaes/)
 [![arXiv](https://img.shields.io/badge/arXiv-2502.04382-b31b1b)](https://arxiv.org/abs/2502.04382)
 [![website](https://img.shields.io/badge/website-hypothesaes.org-brightgreen)](https://hypothesaes.org)
